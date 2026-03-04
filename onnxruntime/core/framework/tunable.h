@@ -8,6 +8,7 @@
 #endif
 
 #include <chrono>
+#include <atomic>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -186,7 +187,15 @@ class TunableOp {
     // > object under construction or destruction, typeid yields the std::type_info object representing the constructor
     // > or destructor’s class.
     // So delay the op signature generation. See https://github.com/microsoft/onnxruntime/pull/14709
-    std::call_once(signature_init_once_, [this]() { signature_ = CreateSignature(); });
+    if (!signature_initialized_.load(std::memory_order_acquire)) {
+      while (signature_init_lock_.test_and_set(std::memory_order_acquire)) {
+      }
+      if (!signature_initialized_.load(std::memory_order_relaxed)) {
+        signature_ = CreateSignature();
+        signature_initialized_.store(true, std::memory_order_release);
+      }
+      signature_init_lock_.clear(std::memory_order_release);
+    }
     return signature_;
   }
 
@@ -309,7 +318,8 @@ class TunableOp {
 #endif
   }
 
-  mutable std::once_flag signature_init_once_;
+  mutable std::atomic<bool> signature_initialized_{false};
+  mutable std::atomic_flag signature_init_lock_ = ATOMIC_FLAG_INIT;
   std::string signature_;
 
   // the default impl to use when tuning is disabled

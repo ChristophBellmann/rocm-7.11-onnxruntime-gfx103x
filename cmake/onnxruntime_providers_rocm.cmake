@@ -155,6 +155,11 @@
   set_target_properties(onnxruntime_providers_rocm PROPERTIES LINKER_LANGUAGE CXX)
   set_target_properties(onnxruntime_providers_rocm PROPERTIES FOLDER "ONNXRuntime")
   target_compile_definitions(onnxruntime_providers_rocm PRIVATE HIPBLAS_V2)
+  # Avoid libstdc++ call_once TLS references in provider DSO that can force
+  # STATIC_TLS and fail at dlopen() on systems with heavy ROCm TLS usage.
+  target_compile_options(onnxruntime_providers_rocm PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:-fno-threadsafe-statics>
+    $<$<COMPILE_LANGUAGE:HIP>:-fno-threadsafe-statics>)
 
   if (onnxruntime_ENABLE_TRAINING)
     target_include_directories(onnxruntime_providers_rocm PRIVATE ${ORTTRAINING_ROOT} ${CMAKE_CURRENT_BINARY_DIR}/amdgpu/orttraining ${MPI_CXX_INCLUDE_DIRS})
@@ -213,6 +218,9 @@
 
   if(UNIX)
     set_property(TARGET onnxruntime_providers_rocm APPEND_STRING PROPERTY LINK_FLAGS "-Xlinker --version-script=${ONNXRUNTIME_ROOT}/core/providers/rocm/version_script.lds -Xlinker --gc-sections")
+    # Keep TLS as dynamic in this DSO; otherwise linker relaxation can emit
+    # local-exec TLS relocations that require static TLS at dlopen() time.
+    target_link_options(onnxruntime_providers_rocm PRIVATE "-Wl,--no-relax")
   else()
     message(FATAL_ERROR "onnxruntime_providers_rocm unknown platform, need to specify shared library exports for it")
   endif()

@@ -449,7 +449,6 @@ onnxruntime_fetchcontent_declare(
     URL_HASH SHA1=${DEP_SHA1_flatbuffers}
     PATCH_COMMAND ${ONNXRUNTIME_FLATBUFFERS_PATCH_COMMAND}
     EXCLUDE_FROM_ALL
-    FIND_PACKAGE_ARGS 23.5.9 NAMES Flatbuffers flatbuffers
 )
 
 onnxruntime_fetchcontent_makeavailable(flatbuffers)

@@ -577,7 +577,13 @@ struct alignas(sizeof(T) * vec_size) aligned_vector {
 #define HIP_KERNEL_ASSERT(...) assert(__VA_ARGS__)
 
 // WARP related definitions and functions
+// ROCm 7.11 no longer exposes warpSize as a constexpr-compatible value.
+// Use the AMD wavefront size constant for compile-time template parameters.
+#if defined(__HIP_PLATFORM_AMD__)
+constexpr int GPU_WARP_SIZE = 64;
+#else
 constexpr int GPU_WARP_SIZE = warpSize;
+#endif
 inline int GPU_WARP_SIZE_HOST = warpSizeDynamic();
 
 template <typename T>

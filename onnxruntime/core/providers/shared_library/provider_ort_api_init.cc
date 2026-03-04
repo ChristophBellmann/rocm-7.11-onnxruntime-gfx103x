@@ -16,15 +16,25 @@
 #define ORT_API_MANUAL_INIT
 #include "core/session/onnxruntime_cxx_api.h"
 
+#include <atomic>
 #include <mutex>
 
 namespace onnxruntime {
 namespace {
-std::once_flag init;
+std::mutex init_mutex;
+std::atomic<bool> initialized{false};
 }  // namespace
 
 void InitProviderOrtApi() {
-  std::call_once(init, []() { Ort::Global<void>::api_ = Provider_GetHost()->OrtGetApiBase()->GetApi(ORT_API_VERSION); });
+  if (initialized.load(std::memory_order_acquire)) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(init_mutex);
+  if (!initialized.load(std::memory_order_relaxed)) {
+    Ort::Global<void>::api_ = Provider_GetHost()->OrtGetApiBase()->GetApi(ORT_API_VERSION);
+    initialized.store(true, std::memory_order_release);
+  }
 }
 
 }  // namespace onnxruntime

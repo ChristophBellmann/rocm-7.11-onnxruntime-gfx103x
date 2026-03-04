@@ -3,7 +3,9 @@
 
 #include "core/providers/cuda/triton_kernel.h"
 #include "core/framework/tunable.h"
+#include <atomic>
 #include <fstream>
+#include <mutex>
 #include <thread>
 
 #ifdef USE_TRITON_KERNEL
@@ -121,13 +123,21 @@ void TryToLoadKernel() {
   ORT_THROW_IF_ERROR(status);
 }
 
-static std::once_flag load_ort_triton_kernel_flag;
+static std::atomic<bool> load_ort_triton_kernel_done{false};
+static std::mutex load_ort_triton_kernel_mutex;
 
 }  // namespace
 
 void LoadOrtTritonKernel() {
-  // load kernel should be called only once
-  std::call_once(load_ort_triton_kernel_flag, TryToLoadKernel);
+  if (load_ort_triton_kernel_done.load(std::memory_order_acquire)) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(load_ort_triton_kernel_mutex);
+  if (!load_ort_triton_kernel_done.load(std::memory_order_relaxed)) {
+    TryToLoadKernel();
+    load_ort_triton_kernel_done.store(true, std::memory_order_release);
+  }
 }
 
 

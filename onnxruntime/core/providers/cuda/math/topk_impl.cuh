@@ -10,6 +10,7 @@
 #include "cub/util_type.cuh"
 #include "cub/util_allocator.cuh"
 #include "cub/device/device_radix_sort.cuh"
+#include <atomic>
 #include <limits>
 // TODO:fix the warnings
 #ifdef _MSC_VER
@@ -415,10 +416,10 @@ Status TopKImpl(const CudaKernel* kernel, bool use_deterministic_compute,
         aligned_dimension, NumericLimits<CudaT>::Lowest(), NumericLimits<CudaT>::Max());
   } else if (K <= BT * 16 || 0 == sorted) {
     if (use_deterministic_compute) {
-      static std::once_flag log_warning;
-      std::call_once(log_warning, []() {
+      static std::atomic<bool> log_warning_once{false};
+      if (!log_warning_once.exchange(true, std::memory_order_relaxed)) {
         LOGS_DEFAULT(WARNING) << "Non-deterministic TopKImpl kernel is called, its outputs may still be nondeterministic.";
-      });
+      }
     }
 
     auto XPT = static_cast<int64_t>(ceil(static_cast<double>(dimension) / GridDim::maxThreadsPerBlock));

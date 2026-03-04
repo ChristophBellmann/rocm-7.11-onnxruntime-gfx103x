@@ -25,10 +25,35 @@
 #include "core/providers/rocm/math/softmax_common.h"
 #include "core/providers/rocm/math/softmax_tunable_op.cuh"
 
+#include <atomic>
 #include <limits>
 
 namespace onnxruntime {
 namespace rocm {
+
+namespace {
+template <typename OpT>
+inline OpT& GetOrCreateTunableOp() {
+  static std::atomic<OpT*> op_ptr{nullptr};
+  static std::atomic_flag create_lock = ATOMIC_FLAG_INIT;
+
+  OpT* op = op_ptr.load(std::memory_order_acquire);
+  if (op != nullptr) {
+    return *op;
+  }
+
+  while (create_lock.test_and_set(std::memory_order_acquire)) {
+  }
+
+  op = op_ptr.load(std::memory_order_relaxed);
+  if (op == nullptr) {
+    op = new OpT();
+    op_ptr.store(op, std::memory_order_release);
+  }
+  create_lock.clear(std::memory_order_release);
+  return *op;
+}
+}  // namespace
 
 template <typename InputT, typename OutputT, typename AccT, bool IsLogSoftmax>
 Status dispatch_warpwise_softmax_forward(Stream* stream, OutputT* dst, const InputT* src, int softmax_elements,
@@ -36,7 +61,7 @@ Status dispatch_warpwise_softmax_forward(Stream* stream, OutputT* dst, const Inp
   SoftmaxParams<InputT, OutputT> params(tuning_ctx, stream, dst, src, softmax_elements, softmax_elements_stride,
                                         softmax_elements_stride, batch_count, IsLogSoftmax);
   if (tuning_ctx != nullptr && tuning_ctx->IsTunableOpEnabled()) {
-    static SoftmaxTunableOp<InputT, OutputT, AccT> op;
+    auto& op = GetOrCreateTunableOp<SoftmaxTunableOp<InputT, OutputT, AccT>>();
     return op(&params);
   }
   return SoftmaxWarpwiseStaticSelection<InputT, OutputT, AccT>(&params);
@@ -64,7 +89,7 @@ Status dispatch_blockwise_softmax_forward(Stream* stream, OutputT* output,
   SoftmaxParams<InputT, OutputT> params(tuning_ctx, stream, output, input, softmax_elements, input_stride,
                                         output_stride, batch_count, IsLogSoftmax);
   if (tuning_ctx != nullptr && tuning_ctx->IsTunableOpEnabled()) {
-    static SoftmaxTunableOp<InputT, OutputT, AccT> op;
+    auto& op = GetOrCreateTunableOp<SoftmaxTunableOp<InputT, OutputT, AccT>>();
     return op(&params);
   }
   return SoftmaxBlockwiseStaticSelection<InputT, OutputT, AccT>(&params);

@@ -4,6 +4,7 @@
 #define _GEMM_H_KEEP_SIGNATURE_DEFINES
 #include "core/providers/rocm/tunable/gemm.h"
 
+#include <atomic>
 #include <type_traits>
 #include <utility>
 
@@ -27,6 +28,28 @@ inline DesiredT NormalizeScalar(ScalarT v) {
   } else {
     return v;
   }
+}
+
+template <typename OpT>
+inline OpT& GetOrCreateTunableOp() {
+  static std::atomic<OpT*> op_ptr{nullptr};
+  static std::atomic_flag create_lock = ATOMIC_FLAG_INIT;
+
+  OpT* op = op_ptr.load(std::memory_order_acquire);
+  if (op != nullptr) {
+    return *op;
+  }
+
+  while (create_lock.test_and_set(std::memory_order_acquire)) {
+  }
+
+  op = op_ptr.load(std::memory_order_relaxed);
+  if (op == nullptr) {
+    op = new OpT();
+    op_ptr.store(op, std::memory_order_release);
+  }
+  create_lock.clear(std::memory_order_release);
+  return *op;
 }
 }  // namespace
 
@@ -53,16 +76,16 @@ inline GEMM(T, ScalarT) {
 
   if (tuning_ctx->IsTunableOpEnabled()) {
     if (opa == BlasOp::N && opb == BlasOp::N) {
-      static internal::GemmTunableOp<T, BlasOp::N, BlasOp::N> gemm{};
+      auto& gemm = GetOrCreateTunableOp<internal::GemmTunableOp<T, BlasOp::N, BlasOp::N>>();
       return gemm(&params);
     } else if (opa == BlasOp::T && opb == BlasOp::N) {
-      static internal::GemmTunableOp<T, BlasOp::T, BlasOp::N> gemm{};
+      auto& gemm = GetOrCreateTunableOp<internal::GemmTunableOp<T, BlasOp::T, BlasOp::N>>();
       return gemm(&params);
     } else if (opa == BlasOp::N && opb == BlasOp::T) {
-      static internal::GemmTunableOp<T, BlasOp::N, BlasOp::T> gemm{};
+      auto& gemm = GetOrCreateTunableOp<internal::GemmTunableOp<T, BlasOp::N, BlasOp::T>>();
       return gemm(&params);
     } else /*if (opa == BlasOp::T && opb == BlasOp::T)*/ {
-      static internal::GemmTunableOp<T, BlasOp::T, BlasOp::T> gemm{};
+      auto& gemm = GetOrCreateTunableOp<internal::GemmTunableOp<T, BlasOp::T, BlasOp::T>>();
       return gemm(&params);
     }
   }
@@ -94,16 +117,16 @@ inline BATCHED_GEMM(T, ScalarT) {
 
   if (tuning_ctx->IsTunableOpEnabled()) {
     if (opa == BlasOp::N && opb == BlasOp::N) {
-      static internal::BatchedGemmTunableOp<T, BlasOp::N, BlasOp::N> gemm{};
+      auto& gemm = GetOrCreateTunableOp<internal::BatchedGemmTunableOp<T, BlasOp::N, BlasOp::N>>();
       return gemm(&params);
     } else if (opa == BlasOp::T && opb == BlasOp::N) {
-      static internal::BatchedGemmTunableOp<T, BlasOp::T, BlasOp::N> gemm{};
+      auto& gemm = GetOrCreateTunableOp<internal::BatchedGemmTunableOp<T, BlasOp::T, BlasOp::N>>();
       return gemm(&params);
     } else if (opa == BlasOp::N && opb == BlasOp::T) {
-      static internal::BatchedGemmTunableOp<T, BlasOp::N, BlasOp::T> gemm{};
+      auto& gemm = GetOrCreateTunableOp<internal::BatchedGemmTunableOp<T, BlasOp::N, BlasOp::T>>();
       return gemm(&params);
     } else /*if (opa == BlasOp::T && opb == BlasOp::T)*/ {
-      static internal::BatchedGemmTunableOp<T, BlasOp::T, BlasOp::T> gemm{};
+      auto& gemm = GetOrCreateTunableOp<internal::BatchedGemmTunableOp<T, BlasOp::T, BlasOp::T>>();
       return gemm(&params);
     }
   }
@@ -138,16 +161,16 @@ inline STRIDED_BATCHED_GEMM(T, ScalarT) {
 
   if (tuning_ctx->IsTunableOpEnabled()) {
     if (opa == BlasOp::N && opb == BlasOp::N) {
-      static internal::StridedBatchedGemmTunableOp<T, BlasOp::N, BlasOp::N> gemm{};
+      auto& gemm = GetOrCreateTunableOp<internal::StridedBatchedGemmTunableOp<T, BlasOp::N, BlasOp::N>>();
       return gemm(&params);
     } else if (opa == BlasOp::T && opb == BlasOp::N) {
-      static internal::StridedBatchedGemmTunableOp<T, BlasOp::T, BlasOp::N> gemm{};
+      auto& gemm = GetOrCreateTunableOp<internal::StridedBatchedGemmTunableOp<T, BlasOp::T, BlasOp::N>>();
       return gemm(&params);
     } else if (opa == BlasOp::N && opb == BlasOp::T) {
-      static internal::StridedBatchedGemmTunableOp<T, BlasOp::N, BlasOp::T> gemm{};
+      auto& gemm = GetOrCreateTunableOp<internal::StridedBatchedGemmTunableOp<T, BlasOp::N, BlasOp::T>>();
       return gemm(&params);
     } else /*if (opa == BlasOp::T && opb == BlasOp::T)*/ {
-      static internal::StridedBatchedGemmTunableOp<T, BlasOp::T, BlasOp::T> gemm{};
+      auto& gemm = GetOrCreateTunableOp<internal::StridedBatchedGemmTunableOp<T, BlasOp::T, BlasOp::T>>();
       return gemm(&params);
     }
   }
