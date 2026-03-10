@@ -44,6 +44,24 @@ This project is tested with [BrowserStack](https://www.browserstack.com/home).
 
 The current release and past releases can be found here: https://github.com/microsoft/onnxruntime/releases.
 
+## Custom ROCm 7.11 packaging for gfx103x
+
+This fork carries the packaging helpers for the custom ROCm 7.11 ONNX Runtime
+wheel used on gfx103x systems. They live under:
+
+- `tools/rocm_release/README.md`
+- `tools/rocm_release/build_onnxruntime_rocm_wheel.sh`
+- `tools/rocm_release/install_onnxruntime_rocm_wheel_to_opt.sh`
+
+That directory is the source of truth for:
+- building the custom `onnxruntime_rocm` wheel against the intended ROCm stack
+- verifying the wheel's ROCm provider TLS characteristics before promotion
+- promoting the verified wheel to `/opt/rocm/wheels/onnxruntime_rocm711/`
+
+TheRock validation is expected to consume that wheel and validate inference
+first against the repo-local custom ROCm build and then against the promoted
+system install under `/opt/rocm`.
+
 For details on the upcoming release, including release dates, announcements, features, and guidance on submitting feature requests, please visit the release roadmap: https://onnxruntime.ai/roadmap.
 
 ## Data/Telemetry

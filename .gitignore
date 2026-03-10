@@ -196,3 +196,4 @@ Package.resolved
 .build/
 .swiftpm/
 repros/
+.rocm_release/
