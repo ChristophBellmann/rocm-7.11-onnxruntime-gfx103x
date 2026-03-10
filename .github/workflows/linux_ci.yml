@@ -20,10 +20,7 @@
 name: Linux CI
 
 on:
-  push:
-    branches: [ main, 'rel-*']
-  pull_request:
-    branches: [ main, 'rel-*']
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

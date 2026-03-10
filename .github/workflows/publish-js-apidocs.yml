@@ -2,13 +2,6 @@ name: Update JS API Docs
 
 # Run when the JS API changes or every month so that the artifact does not expire
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - js/common/**
-  schedule:
-    - cron: '0 0 1,15 * *'
   workflow_dispatch:
 
 concurrency:

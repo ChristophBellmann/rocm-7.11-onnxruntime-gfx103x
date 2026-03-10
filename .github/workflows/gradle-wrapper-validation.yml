@@ -4,10 +4,7 @@
 
 name: "Validate Gradle Wrapper"
 on:
-  push:
-    branches: [ main, 'rel-*']
-  pull_request:
-    branches: [ main, 'rel-*']
+  workflow_dispatch:
 
 jobs:
   validation:

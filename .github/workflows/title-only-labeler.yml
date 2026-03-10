@@ -1,7 +1,6 @@
 name: "Title Only Issue Labeler"
 on:
-  issues:
-    types: [opened, edited]
+  workflow_dispatch:
 
 permissions:
   issues: write

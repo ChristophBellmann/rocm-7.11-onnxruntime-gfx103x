@@ -2,13 +2,6 @@ name: Update Objective-C API Docs
 
 # Run when the Objective-C API changes or every month so that the artifact does not expire
 on:
-  push:
-    branches:
-    - main
-    paths:
-    - objectivec/**
-  schedule:
-  - cron: '0 0 1,15 * *'
   workflow_dispatch:
 
 concurrency:

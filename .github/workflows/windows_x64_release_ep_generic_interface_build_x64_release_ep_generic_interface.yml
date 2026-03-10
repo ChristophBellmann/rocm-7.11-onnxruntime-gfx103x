@@ -1,10 +1,7 @@
 name: windows_x64_release_ep_generic_interface
 
 on:
-  push:
-    branches: [ main, 'rel-*']
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

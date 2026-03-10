@@ -5,9 +5,7 @@
 name: PR Checks
 
 on:
-  pull_request:
-    branches:
-      - main
+  workflow_dispatch:
 
 permissions:  # set top-level default permissions as security best practice
   contents: read

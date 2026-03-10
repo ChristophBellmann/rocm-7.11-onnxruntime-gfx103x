@@ -2,10 +2,7 @@
 name: windows_x64_asan
 
 on:
-  push:
-    branches: [ main, 'rel-*']
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
