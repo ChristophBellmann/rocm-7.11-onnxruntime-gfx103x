@@ -7,6 +7,7 @@
 #include "core/providers/rocm/rocm_common.h"
 #include "core/providers/rocm/shared_inc/fpgeneric.h"
 #include "core/providers/rocm/tensor/slice.h"
+#include <cstdio>
 
 namespace onnxruntime {
 namespace rocm {
@@ -64,6 +65,14 @@ size_t GetMaxWorkspaceSize(miopenHandle_t handle, const MiopenConvState<miopenCo
     max_ws_size = sz;
   }
   return max_ws_size;
+}
+
+size_t GetSearchWorkspaceFallback(int device_id) {
+  size_t free = 0;
+  size_t total = 0;
+  onnxruntime::rocm::hipMemGetInfoAlt(device_id, &free, &total);
+  free = static_cast<size_t>(static_cast<double>(free) * 0.9);
+  return free > AlgoSearchWorkspaceSize ? free : AlgoSearchWorkspaceSize;
 }
 
 Status SliceOutUnwantedOutputSection(hipStream_t stream,
@@ -283,8 +292,21 @@ Status Conv<T, NHWC>::UpdateState(OpKernelContext* context, bool bias_expected) 
       int algo_count = 1;
       const ROCMExecutionProvider* rocm_ep = static_cast<const ROCMExecutionProvider*>(this->Info().GetExecutionProvider());
       static constexpr int num_algos = MIOPEN_CONVOLUTION_FWD_ALGO_COUNT;
-      size_t max_ws_size = rocm_ep->GetMiopenConvUseMaxWorkspace() ? GetMaxWorkspaceSize(GetMiopenHandle(context), s_, kAllAlgos, num_algos, rocm_ep->GetDeviceId())
-                                                                   : AlgoSearchWorkspaceSize;
+      size_t max_ws_size = 0;
+      if (miopenConvolutionForwardGetWorkSpaceSize(
+              GetMiopenHandle(context), s_.w_desc, s_.x_tensor, s_.conv_desc, s_.y_tensor, &max_ws_size) != miopenStatusSuccess ||
+          max_ws_size == 0) {
+        if (rocm_ep->GetMiopenConvUseMaxWorkspace()) {
+          const size_t max_algo_ws = GetMaxWorkspaceSize(GetMiopenHandle(context), s_, kAllAlgos, num_algos, rocm_ep->GetDeviceId());
+          // ROCm 7.11 can report 0 for both search-size queries while the later
+          // solver still needs substantial workspace. In "use max workspace"
+          // mode, fall back to the available-memory budget instead of the
+          // historical 32 MiB floor so the search can evaluate those solvers.
+          max_ws_size = max_algo_ws > 0 ? max_algo_ws : GetSearchWorkspaceFallback(rocm_ep->GetDeviceId());
+        } else {
+          max_ws_size = AlgoSearchWorkspaceSize;
+        }
+      }
       IAllocatorUniquePtr<void> algo_search_workspace = GetTransientScratchBuffer<void>(max_ws_size);
       MIOPEN_RETURN_IF_ERROR(miopenFindConvolutionForwardAlgorithm(
           GetMiopenHandle(context),
@@ -301,7 +323,32 @@ Status Conv<T, NHWC>::UpdateState(OpKernelContext* context, bool bias_expected) 
           algo_search_workspace.get(),
           max_ws_size,
           false));  // Do not do exhaustive algo search.
-      s_.cached_benchmark_fwd_results.insert(x_dims_miopen, {perf.fwd_algo, perf.memory});
+      size_t runtime_workspace = 0;
+      if (GetWorkspaceSize(GetMiopenHandle(context), s_, perf.fwd_algo, &runtime_workspace) != miopenStatusSuccess) {
+        runtime_workspace = 0;
+      }
+      // ROCm 7.11 can return a perf.memory value that is smaller than the actual
+      // runtime requirement for the selected solver (observed with GemmFwdRest).
+      // Use the larger of the search result and the explicit runtime query so
+      // validation does not rely on a zero-sized workspace for a solver that
+      // later asks MIOpen for non-zero workspace.
+      const bool debug_workspace = std::getenv("ORT_ROCM_CONV_WS_DEBUG") != nullptr;
+      size_t workspace_bytes = runtime_workspace > perf.memory ? runtime_workspace : perf.memory;
+      if (rocm_ep->GetMiopenConvUseMaxWorkspace() && max_ws_size > workspace_bytes) {
+        workspace_bytes = max_ws_size;
+      }
+      if (debug_workspace) {
+        const auto shape_str = TensorShape(x_dims_miopen).ToString();
+        std::fprintf(stderr,
+                     "ORT_ROCM_CONV_WS_DEBUG x=%s algo=%d perf.memory=%zu runtime_workspace=%zu max_ws_size=%zu chosen_workspace=%zu\n",
+                     shape_str.c_str(),
+                     static_cast<int>(perf.fwd_algo),
+                     perf.memory,
+                     runtime_workspace,
+                     max_ws_size,
+                     workspace_bytes);
+      }
+      s_.cached_benchmark_fwd_results.insert(x_dims_miopen, {perf.fwd_algo, workspace_bytes});
     }
     const auto& perf = s_.cached_benchmark_fwd_results.at(x_dims_miopen);
     s_.fwd_algo = perf.fwd_algo;

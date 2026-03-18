@@ -2,9 +2,22 @@
 // Licensed under the MIT License.
 
 #include "conv_transpose.h"
+#include "core/providers/rocm/rocm_common.h"
 
 namespace onnxruntime {
 namespace rocm {
+
+namespace {
+
+size_t GetSearchWorkspaceFallback(int device_id) {
+  size_t free = 0;
+  size_t total = 0;
+  onnxruntime::rocm::hipMemGetInfoAlt(device_id, &free, &total);
+  free = static_cast<size_t>(static_cast<double>(free) * 0.9);
+  return free > AlgoSearchWorkspaceSize ? free : AlgoSearchWorkspaceSize;
+}
+
+}  // namespace
 
 // Op Set 11 for ConvTranspose only update document to clearify default dilations and strides value.
 // which are already covered by op set 11 cpu version, so simply add declaration.
@@ -128,7 +141,25 @@ Status ConvTranspose<T, NHWC>::DoConvTranspose(OpKernelContext* context, bool dy
       y_data = reinterpret_cast<HipT*>(p.Y->MutableData<T>());
 
       if (!s_.cached_benchmark_bwd_results.contains(x_dims)) {
-        IAllocatorUniquePtr<void> algo_search_workspace = GetScratchBuffer<void>(AlgoSearchWorkspaceSize, context->GetComputeStream());
+        size_t algo_search_workspace_bytes = 0;
+        const ROCMExecutionProvider* rocm_ep =
+            static_cast<const ROCMExecutionProvider*>(this->Info().GetExecutionProvider());
+        if (miopenConvolutionBackwardDataGetWorkSpaceSize(
+                GetMiopenHandle(context),
+                s_.x_tensor,
+                s_.w_desc,
+                s_.conv_desc,
+                s_.y_tensor,
+                &algo_search_workspace_bytes) != miopenStatusSuccess ||
+            algo_search_workspace_bytes == 0) {
+          // Fall back to the available-memory budget in "use max workspace"
+          // mode when MIOpen cannot report a usable search size.
+          algo_search_workspace_bytes = rocm_ep->GetMiopenConvUseMaxWorkspace()
+                                            ? GetSearchWorkspaceFallback(rocm_ep->GetDeviceId())
+                                            : AlgoSearchWorkspaceSize;
+        }
+        IAllocatorUniquePtr<void> algo_search_workspace =
+            GetScratchBuffer<void>(algo_search_workspace_bytes, context->GetComputeStream());
 
         miopenConvAlgoPerf_t perf;
         int algo_count = 1;
@@ -145,9 +176,20 @@ Status ConvTranspose<T, NHWC>::DoConvTranspose(OpKernelContext* context, bool dy
             &algo_count,
             &perf,
             algo_search_workspace.get(),
-            AlgoSearchWorkspaceSize,
+            algo_search_workspace_bytes,
             false));
-        s_.cached_benchmark_bwd_results.insert(x_dims, {perf.bwd_data_algo, perf.memory});
+        size_t runtime_workspace = 0;
+        if (miopenConvolutionBackwardDataGetWorkSpaceSize(
+                GetMiopenHandle(context),
+                s_.x_tensor,
+                s_.w_desc,
+                s_.conv_desc,
+                s_.y_tensor,
+                &runtime_workspace) != miopenStatusSuccess) {
+          runtime_workspace = 0;
+        }
+        const size_t workspace_bytes = runtime_workspace > perf.memory ? runtime_workspace : perf.memory;
+        s_.cached_benchmark_bwd_results.insert(x_dims, {perf.bwd_data_algo, workspace_bytes});
       }
 
       const auto& perf = s_.cached_benchmark_bwd_results.at(x_dims);
