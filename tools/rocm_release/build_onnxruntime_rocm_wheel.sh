@@ -120,6 +120,103 @@ verify_wheel_tls() {
   echo "TLS check OK (no STATIC_TLS / no once-call TLS relocations)."
 }
 
+refresh_wheel_shared_libs() {
+  local wheel_path="$1"
+  local release_dir="$2"
+  "${PY}" - <<'PY' "${wheel_path}" "${release_dir}"
+import base64
+import csv
+import hashlib
+import os
+import pathlib
+import shutil
+import sys
+import tempfile
+import zipfile
+
+wheel_path = pathlib.Path(sys.argv[1]).resolve()
+release_dir = pathlib.Path(sys.argv[2]).resolve()
+members = {
+    "onnxruntime/capi/libonnxruntime_providers_rocm.so": release_dir / "libonnxruntime_providers_rocm.so",
+    "onnxruntime/capi/libonnxruntime_providers_shared.so": release_dir / "libonnxruntime_providers_shared.so",
+    "onnxruntime/capi/onnxruntime_pybind11_state.so": release_dir / "onnxruntime_pybind11_state.so",
+}
+
+with tempfile.TemporaryDirectory(prefix="ort-wheel-refresh-") as td:
+    td_path = pathlib.Path(td)
+    with zipfile.ZipFile(wheel_path) as zf:
+        zf.extractall(td_path)
+
+    replaced = []
+    for rel_name, src in members.items():
+        dst = td_path / rel_name
+        if not src.is_file() or not dst.is_file():
+            continue
+        if src.read_bytes() != dst.read_bytes():
+            shutil.copy2(src, dst)
+            replaced.append(rel_name)
+
+    if not replaced:
+        print("Wheel refresh: no staged library replacements were required.")
+        sys.exit(0)
+
+    dist_info = next(td_path.glob("*.dist-info"))
+    record = dist_info / "RECORD"
+    rows = []
+    for path in sorted(p for p in td_path.rglob("*") if p.is_file()):
+        rel = path.relative_to(td_path).as_posix()
+        if rel.endswith(".dist-info/RECORD"):
+            rows.append((rel, "", ""))
+            continue
+        data = path.read_bytes()
+        digest = hashlib.sha256(data).digest()
+        b64 = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+        rows.append((rel, f"sha256={b64}", str(len(data))))
+    with record.open("w", newline="", encoding="utf-8") as f:
+        csv.writer(f).writerows(rows)
+
+    repaired = wheel_path.with_suffix(".repacked.whl")
+    with zipfile.ZipFile(repaired, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(p for p in td_path.rglob("*") if p.is_file()):
+            zf.write(path, path.relative_to(td_path).as_posix())
+    os.replace(repaired, wheel_path)
+    print("Wheel refresh: replaced staged libraries:")
+    for rel_name in replaced:
+        print(f"  {rel_name}")
+PY
+}
+
+verify_wheel_matches_release_provider() {
+  local wheel_path="$1"
+  local release_provider="${BUILD_DIR}/Release/libonnxruntime_providers_rocm.so"
+  local tmp_dir wheel_provider
+  if [[ ! -f "${release_provider}" ]]; then
+    echo "WARNING: Release provider .so not found for wheel comparison: ${release_provider}" >&2
+    return 0
+  fi
+  tmp_dir="$(mktemp -d)"
+  cleanup() { rm -rf "${tmp_dir}"; }
+  trap cleanup RETURN
+
+  "${PY}" -c 'import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); n=[x for x in z.namelist() if x.endswith("onnxruntime/capi/libonnxruntime_providers_rocm.so")][0]; z.extract(n, sys.argv[2])' "${wheel_path}" "${tmp_dir}"
+  wheel_provider="$(find "${tmp_dir}" -name libonnxruntime_providers_rocm.so | head -n1 || true)"
+  if [[ -z "${wheel_provider}" || ! -f "${wheel_provider}" ]]; then
+    echo "Could not extract provider .so from wheel: ${wheel_path}" >&2
+    return 5
+  fi
+
+  local wheel_sha release_sha
+  wheel_sha="$(sha256sum "${wheel_provider}" | awk '{print $1}')"
+  release_sha="$(sha256sum "${release_provider}" | awk '{print $1}')"
+  if [[ "${wheel_sha}" != "${release_sha}" ]]; then
+    echo "Wheel/provider mismatch:" >&2
+    echo "  wheel   ${wheel_sha}  ${wheel_path}" >&2
+    echo "  release ${release_sha}  ${release_provider}" >&2
+    return 6
+  fi
+  echo "Wheel/provider check OK (wheel provider matches Release/libonnxruntime_providers_rocm.so)."
+}
+
 cd "${ROOT}"
 
 if ! git config --get-all remote.origin.fetch | grep -q 'refs/heads/\*'; then
@@ -227,7 +324,9 @@ if [[ -z "${WHEEL_PATH}" ]]; then
   exit 2
 fi
 
+refresh_wheel_shared_libs "${WHEEL_PATH}" "${BUILD_DIR}/Release"
 verify_wheel_tls "${WHEEL_PATH}"
+verify_wheel_matches_release_provider "${WHEEL_PATH}"
 cp -f "${WHEEL_PATH}" "${WHEEL_OUT_DIR}/"
 
 echo

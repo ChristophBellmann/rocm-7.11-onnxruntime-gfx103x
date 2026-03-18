@@ -16,6 +16,20 @@ using namespace onnxruntime::common;
 namespace onnxruntime {
 namespace rocm {
 
+static bool IsFastReductionDisabledByEnv() {
+  static const bool disabled = []() {
+    const char* raw_env = std::getenv("ORT_ROCM_DISABLE_FAST_REDUCTION");
+    if (raw_env == nullptr) {
+      return false;
+    }
+
+    std::string value(raw_env);
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value == "1" || value == "true" || value == "yes" || value == "on";
+  }();
+  return disabled;
+}
+
 #define REGISTER_KERNEL_VERSIONED_RANGE_TYPED(name, T, begin, end)                         \
   ONNX_OPERATOR_VERSIONED_TYPED_KERNEL_EX(                                                 \
       name,                                                                                \
@@ -687,7 +701,7 @@ Status ReduceKernel<allow_multi_axes>::ComputeImpl(OpKernelContext* ctx, miopenR
   PrepareReduceMetadata prepare_reduce_metadata;
   ORT_RETURN_IF_ERROR(PrepareForReduce(X, keepdims_, axes, prepare_reduce_metadata));
   Tensor* Y = ctx->Output(0, prepare_reduce_metadata.squeezed_output_dims);
-  const bool fast_reduction = fast_reduction_ && !ctx->GetUseDeterministicCompute();
+  const bool fast_reduction = fast_reduction_ && !ctx->GetUseDeterministicCompute() && !IsFastReductionDisabledByEnv();
   return ReduceComputeCore<T, ReduceTensorIndices>(Info().GetAllocator(OrtMemType::OrtMemTypeDefault), *X, prepare_reduce_metadata, *Y, miopen_reduce_op, axes,
                                                    calculate_log_, calculate_sqt_, log_sum_exp_, fast_reduction, ctx->GetComputeStream());
 }

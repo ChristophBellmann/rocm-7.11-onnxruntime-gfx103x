@@ -89,13 +89,25 @@ TensorShapeVector ComputeOutputStrides(const TensorShape& input_shapes, const gs
 Status Expand::ComputeInternal(OpKernelContext* ctx) const {
   const auto& input_data_tensor = *ctx->Input<Tensor>(0);
   const auto& input_shape_tensor = *ctx->Input<Tensor>(1);
+  const Tensor* contiguous_input = &input_data_tensor;
+
+#ifdef ENABLE_STRIDED_TENSORS
+  std::unique_ptr<Tensor> contiguous_input_holder;
+  if (!input_data_tensor.IsContiguous()) {
+    AllocatorPtr alloc;
+    ORT_RETURN_IF_ERROR(ctx->GetTempSpaceAllocator(&alloc));
+    contiguous_input_holder = Tensor::Create(input_data_tensor.DataType(), input_data_tensor.Shape(), alloc);
+    ORT_RETURN_IF_ERROR(CopyTensor(input_data_tensor, *contiguous_input_holder, *ctx->GetComputeStream()));
+    contiguous_input = contiguous_input_holder.get();
+  }
+#endif
 
   // new shape to be expanded to
   const auto* p_shape = input_shape_tensor.Data<int64_t>();
   TensorShapeVector output_dims{p_shape, p_shape + input_shape_tensor.Shape().Size()};
   TensorShape output_shape(output_dims);
 
-  ORT_RETURN_IF_ERROR(ComputeBroadcastOutputShape(Node().Name(), input_data_tensor.Shape(), output_dims, output_shape));
+  ORT_RETURN_IF_ERROR(ComputeBroadcastOutputShape(Node().Name(), contiguous_input->Shape(), output_dims, output_shape));
   auto& output_tensor = *ctx->Output(0, output_shape);
   if (0 == output_shape.Size()) {
     return Status::OK();
@@ -113,7 +125,7 @@ Status Expand::ComputeInternal(OpKernelContext* ctx) const {
 #endif
 
   output_dims = output_shape.AsShapeVector();
-  auto input_dims = input_data_tensor.Shape().AsShapeVector();
+  auto input_dims = contiguous_input->Shape().AsShapeVector();
 
   CalcEffectiveDims(input_dims, output_dims);
   int rank = gsl::narrow_cast<int>(output_dims.size());
@@ -133,10 +145,10 @@ Status Expand::ComputeInternal(OpKernelContext* ctx) const {
 
   return ExpandImpl(
       Stream(ctx),
-      input_data_tensor.DataType()->Size(),
+      contiguous_input->DataType()->Size(),
       gsl::narrow_cast<int>(output_shape.Size()),
-      gsl::narrow_cast<int>(input_data_tensor.Shape().Size()),
-      input_data_tensor.DataRaw(),
+      gsl::narrow_cast<int>(contiguous_input->Shape().Size()),
+      contiguous_input->DataRaw(),
       output_tensor.MutableDataRaw(),
       output_strides,
       input_strides);
@@ -148,21 +160,34 @@ Status FuncExpand(
     const Tensor* input_data_tensor,
     const Tensor* /*input_shape_tensor*/,
     Tensor* output_tensor) {
+  const Tensor* contiguous_input = input_data_tensor;
+
+#ifdef ENABLE_STRIDED_TENSORS
+  std::unique_ptr<Tensor> contiguous_input_holder;
+  if (!input_data_tensor->IsContiguous()) {
+    AllocatorPtr alloc;
+    ORT_RETURN_IF_ERROR(ctx->GetTempSpaceAllocator(&alloc));
+    contiguous_input_holder = Tensor::Create(input_data_tensor->DataType(), input_data_tensor->Shape(), alloc);
+    ORT_RETURN_IF_ERROR(cuda_kernel->CopyTensor(*input_data_tensor, *contiguous_input_holder, *ctx->GetComputeStream()));
+    contiguous_input = contiguous_input_holder.get();
+  }
+#endif
+
   TensorShape output_shape = output_tensor->Shape();
 
 #ifdef ENABLE_STRIDED_TENSORS
   // Strided output.
-  if (input_data_tensor->DataRaw() == output_tensor->DataRaw()) {
-    gsl::span<const int64_t> input_strides = input_data_tensor->Strides();
+  if (contiguous_input->DataRaw() == output_tensor->DataRaw()) {
+    gsl::span<const int64_t> input_strides = contiguous_input->Strides();
     TensorShapeVector output_strides =
-        ComputeOutputStrides(input_data_tensor->Shape(), input_strides, output_shape);
+        ComputeOutputStrides(contiguous_input->Shape(), input_strides, output_shape);
     output_tensor->SetShapeAndStrides(output_shape, output_strides);
     return Status::OK();
   }
 #endif
 
   auto output_dims = output_shape.AsShapeVector();
-  auto input_dims = input_data_tensor->Shape().AsShapeVector();
+  auto input_dims = contiguous_input->Shape().AsShapeVector();
 
   CalcEffectiveDims(input_dims, output_dims);
   int rank = gsl::narrow_cast<int>(output_dims.size());
@@ -182,10 +207,10 @@ Status FuncExpand(
 
   return ExpandImpl(
       cuda_kernel->Stream(ctx),
-      input_data_tensor->DataType()->Size(),
+      contiguous_input->DataType()->Size(),
       gsl::narrow_cast<int>(output_shape.Size()),
-      gsl::narrow_cast<int>(input_data_tensor->Shape().Size()),
-      input_data_tensor->DataRaw(),
+      gsl::narrow_cast<int>(contiguous_input->Shape().Size()),
+      contiguous_input->DataRaw(),
       output_tensor->MutableDataRaw(),
       output_strides,
       input_strides);

@@ -6,6 +6,7 @@ for the `rocm-7.11-onnxruntime-gfx103x` fork.
 Scope:
 - build the custom `onnxruntime_rocm` wheel from this repo
 - verify the ROCm provider shared object does not regress to STATIC_TLS / once-call TLS relocations
+- verify the wheel-staged `libonnxruntime_providers_rocm.so` matches the freshly built `Release/libonnxruntime_providers_rocm.so`
 - promote the verified wheel to `/opt/rocm/wheels/onnxruntime_rocm711/`
 
 TheRock validation should consume the produced wheel and validate inference
@@ -22,6 +23,16 @@ Default local workspace:
 - `./.rocm_release/wheels/onnxruntime_rocm711/`
 - `./.rocm_release/venvs/ort_build/`
 - `./.rocm_release/install-backups/`
+
+Implementation notes:
+- the build helper repairs the wheel after `setup.py bdist_wheel` if the staged
+  `onnxruntime/capi/libonnxruntime_providers_rocm.so` diverges from the actual
+  `Release/libonnxruntime_providers_rocm.so`
+- the gfx1031 branch keeps the MIOpen convolution algorithm-search workspace at
+  least at the historical `AlgoSearchWorkspaceSize` floor (32 MiB) even when
+  `miopen_conv_use_max_workspace=true`, because some real Piper TTS shapes on
+  ROCm 7.11 otherwise fall back to a zero-sized search buffer and emit
+  `GemmFwdRest` workspace warnings
 
 ## Typical flow
 

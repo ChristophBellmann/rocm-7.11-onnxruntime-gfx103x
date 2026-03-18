@@ -25,6 +25,11 @@
 #endif
 
 #include "core/providers/rocm/rocm_stream_handle.h"
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <sstream>
+#include <unordered_set>
 
 using namespace onnxruntime::common;
 
@@ -2434,6 +2439,167 @@ static bool ArgMaxOrArgMinNeedFallbackToCPU(const onnxruntime::Node& node) {
 
   return false;
 }
+
+static const std::unordered_set<std::string>& GetForcedCpuOps() {
+  static const std::unordered_set<std::string> forced_cpu_ops = []() {
+    std::unordered_set<std::string> result;
+    const char* raw_env = std::getenv("ORT_ROCM_FORCE_CPU_OPS");
+    const std::string raw = raw_env ? raw_env : "";
+    std::stringstream ss(raw);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+      item.erase(item.begin(), std::find_if(item.begin(), item.end(), [](unsigned char c) { return !std::isspace(c); }));
+      item.erase(std::find_if(item.rbegin(), item.rend(), [](unsigned char c) { return !std::isspace(c); }).base(), item.end());
+      if (!item.empty()) {
+        result.insert(item);
+      }
+    }
+    return result;
+  }();
+  return forced_cpu_ops;
+}
+
+static const std::vector<std::string>& GetForcedCpuNodeSubstrings() {
+  static const std::vector<std::string> forced_cpu_nodes = []() {
+    std::vector<std::string> result;
+    const char* raw_env = std::getenv("ORT_ROCM_FORCE_CPU_NODES");
+    const std::string raw = raw_env ? raw_env : "";
+    std::stringstream ss(raw);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+      item.erase(item.begin(), std::find_if(item.begin(), item.end(), [](unsigned char c) { return !std::isspace(c); }));
+      item.erase(std::find_if(item.rbegin(), item.rend(), [](unsigned char c) { return !std::isspace(c); }).base(), item.end());
+      if (!item.empty()) {
+        result.push_back(item);
+      }
+    }
+    return result;
+  }();
+  return forced_cpu_nodes;
+}
+
+struct ForcedCpuOpNodeSubstring {
+  std::string op_type;
+  std::string node_substring;
+};
+
+struct ForcedCpuOpExactNode {
+  std::string op_type;
+  std::string node_name;
+};
+
+static const std::vector<ForcedCpuOpNodeSubstring>& GetForcedCpuOpNodeSubstrings() {
+  static const std::vector<ForcedCpuOpNodeSubstring> forced_cpu_op_nodes = []() {
+    std::vector<ForcedCpuOpNodeSubstring> result;
+    const char* raw_env = std::getenv("ORT_ROCM_FORCE_CPU_OP_NODES");
+    const std::string raw = raw_env ? raw_env : "";
+    std::stringstream ss(raw);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+      item.erase(item.begin(), std::find_if(item.begin(), item.end(), [](unsigned char c) { return !std::isspace(c); }));
+      item.erase(std::find_if(item.rbegin(), item.rend(), [](unsigned char c) { return !std::isspace(c); }).base(), item.end());
+      if (item.empty()) {
+        continue;
+      }
+
+      const auto at = item.find('@');
+      if (at == std::string::npos || at == 0 || at + 1 >= item.size()) {
+        continue;
+      }
+
+      ForcedCpuOpNodeSubstring entry;
+      entry.op_type = item.substr(0, at);
+      entry.node_substring = item.substr(at + 1);
+      if (!entry.op_type.empty() && !entry.node_substring.empty()) {
+        result.push_back(std::move(entry));
+      }
+    }
+    return result;
+  }();
+  return forced_cpu_op_nodes;
+}
+
+static const std::vector<ForcedCpuOpExactNode>& GetForcedCpuOpExactNodes() {
+  static const std::vector<ForcedCpuOpExactNode> forced_cpu_op_exact_nodes = []() {
+    std::vector<ForcedCpuOpExactNode> result;
+    const char* raw_env = std::getenv("ORT_ROCM_FORCE_CPU_OP_EXACT_NODES");
+    const std::string raw = raw_env ? raw_env : "";
+    std::stringstream ss(raw);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+      item.erase(item.begin(), std::find_if(item.begin(), item.end(), [](unsigned char c) { return !std::isspace(c); }));
+      item.erase(std::find_if(item.rbegin(), item.rend(), [](unsigned char c) { return !std::isspace(c); }).base(), item.end());
+      if (item.empty()) {
+        continue;
+      }
+
+      const auto at = item.find('@');
+      if (at == std::string::npos || at == 0 || at + 1 >= item.size()) {
+        continue;
+      }
+
+      ForcedCpuOpExactNode entry;
+      entry.op_type = item.substr(0, at);
+      entry.node_name = item.substr(at + 1);
+      if (!entry.op_type.empty() && !entry.node_name.empty()) {
+        result.push_back(std::move(entry));
+      }
+    }
+    return result;
+  }();
+  return forced_cpu_op_exact_nodes;
+}
+
+static bool ShouldForceCpuNodeByName(const Node& node) {
+  const auto& substrings = GetForcedCpuNodeSubstrings();
+  if (substrings.empty()) {
+    return false;
+  }
+
+  const std::string& node_name = node.Name();
+  for (const auto& needle : substrings) {
+    if (node_name.find(needle) != std::string::npos) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static bool ShouldForceCpuNodeByOpAndName(const Node& node) {
+  const auto& entries = GetForcedCpuOpNodeSubstrings();
+  if (entries.empty()) {
+    return false;
+  }
+
+  const std::string& node_name = node.Name();
+  const std::string& op_type = node.OpType();
+  for (const auto& entry : entries) {
+    if (entry.op_type == op_type && node_name.find(entry.node_substring) != std::string::npos) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static bool ShouldForceCpuNodeByExactOpAndName(const Node& node) {
+  const auto& entries = GetForcedCpuOpExactNodes();
+  if (entries.empty()) {
+    return false;
+  }
+
+  const std::string& node_name = node.Name();
+  const std::string& op_type = node.OpType();
+  for (const auto& entry : entries) {
+    if (entry.op_type == op_type && node_name == entry.node_name) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 std::unique_ptr<onnxruntime::IDataTransfer> ROCMExecutionProvider::GetDataTransfer() const {
   return std::make_unique<onnxruntime::GPUDataTransfer>();
 }
@@ -2469,7 +2635,12 @@ ROCMExecutionProvider::GetCapability(const onnxruntime::GraphViewer& graph,
 
     bool not_supported = false;
     bool force_inside = false;  // for some compute heavy ops, we'll force it to run inside ROCM
-    if ("LSTM" == node.OpType() ||
+    if (GetForcedCpuOps().count(node.OpType()) > 0 ||
+        ShouldForceCpuNodeByName(node) ||
+        ShouldForceCpuNodeByOpAndName(node) ||
+        ShouldForceCpuNodeByExactOpAndName(node)) {
+      not_supported = true;
+    } else if ("LSTM" == node.OpType() ||
         "RNN" == node.OpType() ||
         "GRU" == node.OpType()) {
       not_supported = true;
