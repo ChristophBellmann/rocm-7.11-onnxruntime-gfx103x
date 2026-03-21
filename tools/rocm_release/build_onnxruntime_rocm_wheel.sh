@@ -19,6 +19,8 @@ PARALLEL="${PARALLEL:-$(nproc)}"
 DO_UPDATE="${DO_UPDATE:-1}"
 PYTHON_BIN="${PYTHON_BIN:-}"
 ORT_REF="${ORT_REF:-}"
+CMAKE_C_COMPILER_LAUNCHER="${CMAKE_C_COMPILER_LAUNCHER:-${ORT_CMAKE_C_COMPILER_LAUNCHER:-}}"
+CMAKE_CXX_COMPILER_LAUNCHER="${CMAKE_CXX_COMPILER_LAUNCHER:-${ORT_CMAKE_CXX_COMPILER_LAUNCHER:-}}"
 
 TLS_C_FLAGS="${TLS_C_FLAGS:--ftls-model=global-dynamic}"
 TLS_CXX_FLAGS="${TLS_CXX_FLAGS:--ftls-model=global-dynamic}"
@@ -36,6 +38,8 @@ Environment:
   VENV_DIR=.rocm_release/venvs/ort_build
   DO_UPDATE=1|0
   USE_MIGRAPHX=1|0
+  CMAKE_C_COMPILER_LAUNCHER=<optional launcher, e.g. ccache>
+  CMAKE_CXX_COMPILER_LAUNCHER=<optional launcher, e.g. ccache>
 USAGE
 }
 
@@ -280,6 +284,22 @@ if [[ ! -f "${CMAKE_CACHE}" ]] || ! grep -q '^Python_NumPy_INCLUDE_DIR:' "${CMAK
   fi
 fi
 
+CMAKE_EXTRA_DEFINES=(
+  "CMAKE_HIP_ARCHITECTURES=${HIP_ARCH}"
+  "onnxruntime_USE_COMPOSABLE_KERNEL=OFF"
+  "onnxruntime_BUILD_UNIT_TESTS=OFF"
+  "onnxruntime_DISABLE_CONTRIB_OPS=ON"
+  "CMAKE_C_FLAGS=${TLS_C_FLAGS}"
+  "CMAKE_CXX_FLAGS=${TLS_CXX_FLAGS}"
+  "CMAKE_SHARED_LINKER_FLAGS=${TLS_LINK_FLAGS}"
+)
+if [[ -n "${CMAKE_C_COMPILER_LAUNCHER}" ]]; then
+  CMAKE_EXTRA_DEFINES+=("CMAKE_C_COMPILER_LAUNCHER=${CMAKE_C_COMPILER_LAUNCHER}")
+fi
+if [[ -n "${CMAKE_CXX_COMPILER_LAUNCHER}" ]]; then
+  CMAKE_EXTRA_DEFINES+=("CMAKE_CXX_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER}")
+fi
+
 echo "== ONNX Runtime ROCm wheel build =="
 echo "ROOT=${ROOT}"
 echo "WORK_ROOT=${WORK_ROOT}"
@@ -295,6 +315,8 @@ echo "MIGRAPHX_HOME=${MIGRAPHX_HOME}"
 echo "PARALLEL=${PARALLEL}"
 echo "DO_UPDATE=${DO_UPDATE}"
 echo "LOG_FILE=${LOG_FILE}"
+echo "CMAKE_C_COMPILER_LAUNCHER=${CMAKE_C_COMPILER_LAUNCHER:-<unset>}"
+echo "CMAKE_CXX_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER:-<unset>}"
 
 "${PY}" tools/ci_build/build.py \
   --build_dir "${BUILD_DIR}" \
@@ -309,13 +331,7 @@ echo "LOG_FILE=${LOG_FILE}"
   --rocm_home "${ROCM_PATH}" \
   --rocm_version "${ROCM_VERSION}" \
   --cmake_extra_defines \
-    "CMAKE_HIP_ARCHITECTURES=${HIP_ARCH}" \
-    "onnxruntime_USE_COMPOSABLE_KERNEL=OFF" \
-    "onnxruntime_BUILD_UNIT_TESTS=OFF" \
-    "onnxruntime_DISABLE_CONTRIB_OPS=ON" \
-    "CMAKE_C_FLAGS=${TLS_C_FLAGS}" \
-    "CMAKE_CXX_FLAGS=${TLS_CXX_FLAGS}" \
-    "CMAKE_SHARED_LINKER_FLAGS=${TLS_LINK_FLAGS}" \
+    "${CMAKE_EXTRA_DEFINES[@]}" \
   2>&1 | tee "${LOG_FILE}"
 
 WHEEL_PATH="$(find "${BUILD_DIR}/Release/dist" -maxdepth 1 -type f -name 'onnxruntime_rocm-*.whl' | head -n1 || true)"

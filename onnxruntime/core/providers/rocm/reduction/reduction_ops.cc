@@ -82,6 +82,14 @@ Status ReduceKernel<allow_multi_axes>::ReduceKernelShared(
     int m{}, n{};
     const auto applicable_matrix_reduction = get_applicable_matrix_reduction(
         miopen_reduce_op, input_shape.GetDims(), axes_, m, n);
+    // The ROCm fast matrix-reduction path is currently not reliable for the
+    // column-wise AVG/ReduceMean case on real Piper TTS shapes (for example
+    // [1,17,192] -> [1,17,1]). Keep the optimized path for ADD and for row-wise
+    // reductions, but route column-wise AVG through the regular MIOpen path.
+    if (miopen_reduce_op == MIOPEN_REDUCE_TENSOR_AVG &&
+        applicable_matrix_reduction == ApplicableMatrixReduction::Columns) {
+      // Fall through to the regular reduction path below.
+    } else {
     switch (applicable_matrix_reduction) {
       case ApplicableMatrixReduction::Rows: {
         return reduce_matrix_rows(
@@ -94,6 +102,7 @@ Status ReduceKernel<allow_multi_axes>::ReduceKernelShared(
       // don't call reduce_matrix_columns() since it will reset initial output data
       default:
         break;
+    }
     }
   }
 
@@ -377,6 +386,14 @@ Status ReduceComputeCore(const AllocatorPtr& gpu_allocator, const Tensor& input,
     int m{}, n{};
     const auto applicable_matrix_reduction =
         get_applicable_matrix_reduction(miopen_reduce_op, input_shape.GetDims(), axes, m, n);
+    // The ROCm fast matrix-reduction path is currently not reliable for the
+    // column-wise AVG/ReduceMean case on real Piper TTS shapes (for example
+    // [1,17,192] -> [1,17,1]). Keep the optimized path for ADD and for row-wise
+    // reductions, but route column-wise AVG through the regular MIOpen path.
+    if (miopen_reduce_op == MIOPEN_REDUCE_TENSOR_AVG &&
+        applicable_matrix_reduction == ApplicableMatrixReduction::Columns) {
+      // Fall through to the regular reduction path below.
+    } else
     if (applicable_matrix_reduction != ApplicableMatrixReduction::None) {
       IAllocatorUniquePtr<T> input_data_buffer(nullptr, [](T*) {});
       const HipT* input_data = reinterpret_cast<const HipT*>(input.Data<T>());

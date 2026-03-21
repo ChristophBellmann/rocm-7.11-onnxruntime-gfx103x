@@ -61,13 +61,20 @@ common::Status GPUDataTransfer::CopyTensorAsync(const Tensor& src, Tensor& dst, 
 
   if (dst_device.Type() == OrtDevice::GPU) {
     if (src_device.Type() == OrtDevice::CPU) {
-      // If source are not pinned, the memory copy will be performed synchronously.
-      // For best performance, use hipHostMalloc to allocate host memory that is transferred asynchronously.
-      HIP_RETURN_IF_ERROR(hipMemcpyAsync(dst_data, src_data, bytes, hipMemcpyHostToDevice, static_cast<hipStream_t>(stream.GetHandle())));
-      if (src_device.MemType() != OrtDevice::MemType::HIP_PINNED) {
-        // Pageable host buffers may not have completed DMA to the final device destination
-        // when hipMemcpyAsync returns. Make the completion explicit before dependent ROCm ops run.
-        HIP_RETURN_IF_ERROR(hipStreamSynchronize(static_cast<hipStream_t>(stream.GetHandle())));
+      if (bytes <= 16) {
+        // Piper TTS routes tiny CPU scalars through MemcpyFromHost into ROCm consumers.
+        // Use a blocking copy for these tiny payloads so downstream kernels do not observe
+        // stale values from an in-flight async H2D transfer.
+        HIP_RETURN_IF_ERROR(hipMemcpy(dst_data, src_data, bytes, hipMemcpyHostToDevice));
+      } else {
+        // If source are not pinned, the memory copy will be performed synchronously.
+        // For best performance, use hipHostMalloc to allocate host memory that is transferred asynchronously.
+        HIP_RETURN_IF_ERROR(hipMemcpyAsync(dst_data, src_data, bytes, hipMemcpyHostToDevice, static_cast<hipStream_t>(stream.GetHandle())));
+        if (src_device.MemType() != OrtDevice::MemType::HIP_PINNED) {
+          // Pageable host buffers may not have completed DMA to the final device destination
+          // when hipMemcpyAsync returns. Make the completion explicit before dependent ROCm ops run.
+          HIP_RETURN_IF_ERROR(hipStreamSynchronize(static_cast<hipStream_t>(stream.GetHandle())));
+        }
       }
     } else if (src_device.Type() == OrtDevice::GPU) {
       // copying between GPU, this is non-blocking

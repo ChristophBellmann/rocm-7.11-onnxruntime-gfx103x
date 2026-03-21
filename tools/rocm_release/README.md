@@ -8,6 +8,8 @@ Scope:
 - verify the ROCm provider shared object does not regress to STATIC_TLS / once-call TLS relocations
 - verify the wheel-staged `libonnxruntime_providers_rocm.so` matches the freshly built `Release/libonnxruntime_providers_rocm.so`
 - promote the verified wheel to `/opt/rocm/wheels/onnxruntime_rocm711/`
+- allow launcher-based incremental build acceleration (for example `ccache`) via
+  `CMAKE_C_COMPILER_LAUNCHER` / `CMAKE_CXX_COMPILER_LAUNCHER`
 
 TheRock validation should consume the produced wheel and validate inference
 first against the repo-local custom ROCm build, then against the promoted
@@ -39,8 +41,10 @@ Implementation notes:
 Build first against the repo-local custom ROCm output:
 
 ```bash
-./tools/rocm_release/build_onnxruntime_rocm_wheel.sh \
-  ROCM_PATH=/path/to/TheRock/build-stage2/dist/rocm
+ROCM_PATH=/path/to/TheRock/build-stage2/dist/rocm \
+CMAKE_C_COMPILER_LAUNCHER=ccache \
+CMAKE_CXX_COMPILER_LAUNCHER=ccache \
+./tools/rocm_release/build_onnxruntime_rocm_wheel.sh
 ```
 
 Then promote the verified wheel:

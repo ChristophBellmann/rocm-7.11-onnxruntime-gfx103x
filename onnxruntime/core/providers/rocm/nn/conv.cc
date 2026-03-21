@@ -334,9 +334,9 @@ Status Conv<T, NHWC>::UpdateState(OpKernelContext* context, bool bias_expected) 
       // later asks MIOpen for non-zero workspace.
       const bool debug_workspace = std::getenv("ORT_ROCM_CONV_WS_DEBUG") != nullptr;
       size_t workspace_bytes = runtime_workspace > perf.memory ? runtime_workspace : perf.memory;
-      if (rocm_ep->GetMiopenConvUseMaxWorkspace() && max_ws_size > workspace_bytes) {
-        workspace_bytes = max_ws_size;
-      }
+      // The larger search budget is only for miopenFindConvolutionForwardAlgorithm().
+      // Reusing that budget at runtime can promote small convs to multi-gigabyte
+      // arena allocations on 12 GiB cards even when the selected solver needs far less.
       if (debug_workspace) {
         const auto shape_str = TensorShape(x_dims_miopen).ToString();
         std::fprintf(stderr,
