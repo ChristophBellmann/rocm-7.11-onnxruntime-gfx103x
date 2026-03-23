@@ -372,10 +372,11 @@ Status Conv<T, NHWC>::UpdateState(OpKernelContext* context, bool bias_expected) 
 template <typename T, bool NHWC>
 Status Conv<T, NHWC>::ComputeInternal(OpKernelContext* context) const {
   std::lock_guard<std::mutex> lock(s_.mutex);
-  // MIOpen's forward-solver reuse for 1D convolutions represented on the ROCm
-  // path can drift across repeated session runs on gfx1031. Keep these tiny
-  // Piper-style convs correct by recomputing the forward selection per run
-  // instead of reusing the dimension-keyed cache.
+  // MIOpen's forward-solver reuse for Piper's duration-predictor 1D
+  // convolutions can drift across repeated session runs on gfx1031. Keep the
+  // confirmed problematic flow blocks correct by recomputing the forward
+  // selection per run instead of reusing the dimension-keyed cache globally
+  // for every small 1D conv in the graph.
   const auto* X = context->Input<Tensor>(0);
   const auto* W = context->Input<Tensor>(1);
   const bool is_small_conv1d =
@@ -383,7 +384,12 @@ Status Conv<T, NHWC>::ComputeInternal(OpKernelContext* context) const {
       X->Shape().NumDimensions() == 3 &&
       W->Shape().NumDimensions() == 3 &&
       X->Shape()[2] <= 32;
-  if (is_small_conv1d) {
+  const std::string& node_name = OpKernel::Node().Name();
+  const bool is_problematic_piper_flow_conv =
+      is_small_conv1d &&
+      (node_name.rfind("/dp/flows.3/", 0) == 0 ||
+       node_name.rfind("/dp/flows.5/", 0) == 0);
+  if (is_problematic_piper_flow_conv) {
     s_.last_x_dims = TensorShape();
     s_.cached_benchmark_fwd_results.clear();
   }
