@@ -7,6 +7,7 @@
 #include "core/providers/rocm/rocm_common.h"
 #include "core/providers/rocm/shared_inc/fpgeneric.h"
 #include "core/providers/rocm/tensor/slice.h"
+#include <cstdlib>
 #include <cstdio>
 
 namespace onnxruntime {
@@ -75,6 +76,19 @@ size_t GetSearchWorkspaceFallback(int device_id) {
   return free > AlgoSearchWorkspaceSize ? free : AlgoSearchWorkspaceSize;
 }
 
+bool IsSmallConv1d(const Tensor* X, const Tensor* W) {
+  return X != nullptr && W != nullptr &&
+         X->Shape().NumDimensions() == 3 &&
+         W->Shape().NumDimensions() == 3 &&
+         X->Shape()[2] <= 32;
+}
+
+bool IsProblematicPiperFlowConv(const Tensor* X, const Tensor* W, const std::string& node_name) {
+  return IsSmallConv1d(X, W) &&
+         (node_name.rfind("/dp/flows.3/", 0) == 0 ||
+          node_name.rfind("/dp/flows.5/", 0) == 0);
+}
+
 Status SliceOutUnwantedOutputSection(hipStream_t stream,
                                      const void* input_data, gsl::span<const int64_t> input_dims,
                                      void* output_data,
@@ -112,7 +126,6 @@ Status Conv<T, NHWC>::UpdateState(OpKernelContext* context, bool bias_expected) 
   if (channels_last && (x_shape.NumDimensions() != 4 || w_shape.NumDimensions() != 4)) {
     return ORT_MAKE_STATUS(ONNXRUNTIME, INVALID_ARGUMENT, "Number of dimensions of X and W should be 4 for channels_last format (NHWC)");
   }
-
   // set B
   if (context->InputCount() >= 3) {
     const Tensor* B = context->Input<Tensor>(2);
@@ -287,7 +300,8 @@ Status Conv<T, NHWC>::UpdateState(OpKernelContext* context, bool bias_expected) 
       HIP_CALL_THROW(hipMemsetAsync(s_.b_zero, 0, malloc_size, Stream(context)));
     }
 
-    if (!s_.cached_benchmark_fwd_results.contains(x_dims_miopen)) {
+    const bool cache_hit = s_.cached_benchmark_fwd_results.contains(x_dims_miopen);
+    if (!cache_hit) {
       miopenConvAlgoPerf_t perf;
       int algo_count = 1;
       const ROCMExecutionProvider* rocm_ep = static_cast<const ROCMExecutionProvider*>(this->Info().GetExecutionProvider());
@@ -374,24 +388,16 @@ Status Conv<T, NHWC>::ComputeInternal(OpKernelContext* context) const {
   std::lock_guard<std::mutex> lock(s_.mutex);
   // MIOpen's forward-solver reuse for Piper's duration-predictor 1D
   // convolutions can drift across repeated session runs on gfx1031. Keep the
-  // confirmed problematic flow blocks correct by recomputing the forward
-  // selection per run instead of reusing the dimension-keyed cache globally
-  // for every small 1D conv in the graph.
+  // confirmed problematic flow blocks correct by rebuilding the shape-driven
+  // forward state per run. The narrowed March 23 trace showed the same safe
+  // forward algo is reselected for these nodes, so keep the per-node algo
+  // cache and only force the descriptor/state refresh here.
   const auto* X = context->Input<Tensor>(0);
   const auto* W = context->Input<Tensor>(1);
-  const bool is_small_conv1d =
-      X != nullptr && W != nullptr &&
-      X->Shape().NumDimensions() == 3 &&
-      W->Shape().NumDimensions() == 3 &&
-      X->Shape()[2] <= 32;
   const std::string& node_name = OpKernel::Node().Name();
-  const bool is_problematic_piper_flow_conv =
-      is_small_conv1d &&
-      (node_name.rfind("/dp/flows.3/", 0) == 0 ||
-       node_name.rfind("/dp/flows.5/", 0) == 0);
+  const bool is_problematic_piper_flow_conv = IsProblematicPiperFlowConv(X, W, node_name);
   if (is_problematic_piper_flow_conv) {
     s_.last_x_dims = TensorShape();
-    s_.cached_benchmark_fwd_results.clear();
   }
   ORT_RETURN_IF_ERROR(UpdateState(context));
   if (s_.Y->Shape().Size() == 0) {
