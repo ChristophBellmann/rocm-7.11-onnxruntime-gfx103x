@@ -35,6 +35,9 @@ Implementation notes:
   `miopen_conv_use_max_workspace=true`, because some real Piper TTS shapes on
   ROCm 7.11 otherwise fall back to a zero-sized search buffer and emit
   `GemmFwdRest` workspace warnings
+- new ONNX Runtime ROCm wheels are built against NumPy 2 by default via
+  `NUMPY_SPEC='numpy>=2,<3'`; set `NUMPY_SPEC='numpy<2'` only to reproduce
+  legacy NumPy-1 ABI wheels
 
 ## Typical flow
 
@@ -44,6 +47,14 @@ Build first against the repo-local custom ROCm output:
 ROCM_PATH=/path/to/TheRock/build-stage2/dist/rocm \
 CMAKE_C_COMPILER_LAUNCHER=ccache \
 CMAKE_CXX_COMPILER_LAUNCHER=ccache \
+./tools/rocm_release/build_onnxruntime_rocm_wheel.sh
+```
+
+Legacy NumPy-1 ABI reproduction, only when required for comparison:
+
+```bash
+NUMPY_SPEC='numpy<2' \
+ROCM_PATH=/path/to/TheRock/build-stage2/dist/rocm \
 ./tools/rocm_release/build_onnxruntime_rocm_wheel.sh
 ```
 
