@@ -15,6 +15,23 @@ TheRock validation should consume the produced wheel and validate inference
 first against the repo-local custom ROCm build, then against the promoted
 system install under `/opt/rocm`.
 
+## Shared ROCm 7.11 framework policy
+
+Framework packaging ownership is split by fork:
+
+- PyTorch wheel family and deterministic project venvs:
+  `rocm-7.11-pytorch-gfx103x/tools/rocm_release/`
+- ONNX Runtime wheel family:
+  this directory
+- TensorFlow wheel family:
+  `rocm-7.11-tensorflow-gfx103x/tools/rocm_release/`
+- TheRock/base repo:
+  ROCm stack build plus integration/validation only
+
+Do not use the PyTorch project-venv helper for ONNX Runtime. ONNX Runtime uses
+its own isolated runtime venvs inside TheRock validation. The PyTorch helper is
+only for PyTorch/Whisper-style consumer projects.
+
 ## Layout
 
 - `build_onnxruntime_rocm_wheel.sh`
