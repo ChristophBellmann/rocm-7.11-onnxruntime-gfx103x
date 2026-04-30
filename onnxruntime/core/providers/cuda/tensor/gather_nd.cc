@@ -22,6 +22,7 @@ Status CheckBatchDimensionsMatch(
   }
 
   if (tensor_shapes.empty()) return Status::OK();
+
   const TensorShape& first_tensor_shape = tensor_shapes.front();
   for (size_t batch_dimension_idx = 0; batch_dimension_idx < num_batch_dimensions; ++batch_dimension_idx) {
     for (size_t tensor_shape_idx = 1; tensor_shape_idx < tensor_shapes.size(); ++tensor_shape_idx) {
@@ -120,18 +121,9 @@ Status GatherNDBase::PrepareCompute(
           .TypeConstraint("indices", DataTypeImpl::GetTensorType<TIndex>()),                                   \
       GatherND<TIndex>);
 
-// The CUDA provider implementation is hipified into the ROCm provider during ROCm builds.
-// For Piper/VITS duration-predictor graphs on gfx103x, the ROCm GatherND kernel can hit
-// a device-side assertion in _ComputeSliceOffsetsKernel when dynamic index tensors are
-// produced by the preceding flow/NonZero chain. That aborts the whole HIP queue and turns
-// a recoverable provider fallback into a process crash. Do not register GatherND for ROCm;
-// ONNX Runtime will assign it to the CPU provider and insert the required copies while the
-// rest of the graph can still run on ROCm.
-#if !defined(USE_ROCM)
 REGISTER_KERNEL_TYPED_GATHER_ND(int64_t, 13)
 REGISTER_KERNEL_VERSIONED_TYPED_GATHER_ND(int64_t, 12, 12)
 REGISTER_KERNEL_VERSIONED_TYPED_GATHER_ND(int64_t, 11, 11)
-#endif
 
 template <typename T>
 struct GatherNDComputeImpl {
@@ -144,8 +136,7 @@ struct GatherNDComputeImpl {
     typedef typename ToCudaType<T>::MappedType CudaT;
     GatherNDImpl<CudaT>(stream,
                         num_slices, kernel_input_data,
-                        kernel_output_data, slice_size,
-                        input_slice_offsets_data);
+                        kernel_output_data, slice_size, input_slice_offsets_data);
   }
 };
 
