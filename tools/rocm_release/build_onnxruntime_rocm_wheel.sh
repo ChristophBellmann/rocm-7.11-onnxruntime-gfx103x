@@ -19,6 +19,7 @@ PARALLEL="${PARALLEL:-$(nproc)}"
 DO_UPDATE="${DO_UPDATE:-1}"
 PYTHON_BIN="${PYTHON_BIN:-}"
 ORT_REF="${ORT_REF:-}"
+NUMPY_SPEC="${NUMPY_SPEC:-numpy>=2,<3}"
 CMAKE_C_COMPILER_LAUNCHER="${CMAKE_C_COMPILER_LAUNCHER:-${ORT_CMAKE_C_COMPILER_LAUNCHER:-}}"
 CMAKE_CXX_COMPILER_LAUNCHER="${CMAKE_CXX_COMPILER_LAUNCHER:-${ORT_CMAKE_CXX_COMPILER_LAUNCHER:-}}"
 
@@ -38,6 +39,7 @@ Environment:
   VENV_DIR=.rocm_release/venvs/ort_build
   DO_UPDATE=1|0
   USE_MIGRAPHX=1|0
+  NUMPY_SPEC='numpy>=2,<3'   # set to 'numpy<2' only to reproduce legacy NumPy-1 ABI wheels
   CMAKE_C_COMPILER_LAUNCHER=<optional launcher, e.g. ccache>
   CMAKE_CXX_COMPILER_LAUNCHER=<optional launcher, e.g. ccache>
 USAGE
@@ -95,7 +97,7 @@ ensure_python() {
 }
 
 PY="$(ensure_python)"
-"${PY}" -m pip install -q "numpy<2" packaging >/dev/null
+"${PY}" -m pip install -q "${NUMPY_SPEC}" packaging >/dev/null
 
 verify_wheel_tls() {
   local wheel_path="$1"
@@ -314,6 +316,7 @@ echo "USE_MIGRAPHX=${USE_MIGRAPHX}"
 echo "MIGRAPHX_HOME=${MIGRAPHX_HOME}"
 echo "PARALLEL=${PARALLEL}"
 echo "DO_UPDATE=${DO_UPDATE}"
+echo "NUMPY_SPEC=${NUMPY_SPEC}"
 echo "LOG_FILE=${LOG_FILE}"
 echo "CMAKE_C_COMPILER_LAUNCHER=${CMAKE_C_COMPILER_LAUNCHER:-<unset>}"
 echo "CMAKE_CXX_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER:-<unset>}"
